@@ -2,247 +2,27 @@ import cv2
 import torch
 import numpy as np
 import math
-from .function import helper as helper
-from .function import utils_rotate as utils_rotate
+from .function import helper
+from .function import utils_rotate
 
 from torch import functional as F
 from spandrel import ModelLoader
 
 
-class RealESRGANer():
-    """A helper class for upsampling images with RealESRGAN.
-
-    Args:
-        scale (int): Upsampling scale factor used in the networks. It is usually 2 or 4.
-        model_path (str): The path to the pretrained model. It can be urls (will first download it automatically).
-        model (nn.Module): The defined network. Default: None.
-        tile (int): As too large images result in the out of GPU memory issue, so this tile option will first crop
-            input images into tiles, and then process each of them. Finally, they will be merged into one image.
-            0 denotes for do not use tile. Default: 0.
-        tile_pad (int): The pad size for each tile, to remove border artifacts. Default: 10.
-        pre_pad (int): Pad the input images to avoid border artifacts. Default: 10.
-        half (float): Whether to use half precision during inference. Default: False.
-    """
-
-    def __init__(self,
-                 scale,
-                 dni_weight=None,
-                 model=None,
-                 tile=0,
-                 tile_pad=10,
-                 pre_pad=10,
-                 half=False,
-                 device=None,
-                 gpu_id=None):
-        self.scale = scale
-        self.tile_size = tile
-        self.tile_pad = tile_pad
-        self.pre_pad = pre_pad
-        self.mod_scale = None
-        self.half = half
-        if gpu_id:
-            self.device = torch.device(
-                f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu') if device is None else device
-        else:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if device is None else device
-        model.eval()
-        self.model = model.to(self.device)
-        if self.half:
-            self.model = self.model.half()
-
-    def dni(self, net_a, net_b, dni_weight, key='params', loc='cpu'):
-        """Deep network interpolation.
-
-        ``Paper: Deep Network Interpolation for Continuous Imagery Effect Transition``
-        """
-        net_a = torch.load(net_a, map_location=torch.device(loc))
-        net_b = torch.load(net_b, map_location=torch.device(loc))
-        for k, v_a in net_a[key].items():
-            net_a[key][k] = dni_weight[0] * v_a + dni_weight[1] * net_b[key][k]
-        return net_a
-
-    def pre_process(self, img):
-        """Pre-process, such as pre-pad and mod pad, so that the images can be divisible
-        """
-        img = torch.from_numpy(np.transpose(img, (2, 0, 1))).float()
-        self.img = img.unsqueeze(0).to(self.device)
-        if self.half:
-            self.img = self.img.half()
-
-        # pre_pad
-        if self.pre_pad != 0:
-            self.img = F.pad(self.img, (0, self.pre_pad, 0, self.pre_pad), 'reflect')
-        # mod pad for divisible borders
-        if self.scale == 2:
-            self.mod_scale = 2
-        elif self.scale == 1:
-            self.mod_scale = 4
-        if self.mod_scale is not None:
-            self.mod_pad_h, self.mod_pad_w = 0, 0
-            _, _, h, w = self.img.size()
-            if (h % self.mod_scale != 0):
-                self.mod_pad_h = (self.mod_scale - h % self.mod_scale)
-            if (w % self.mod_scale != 0):
-                self.mod_pad_w = (self.mod_scale - w % self.mod_scale)
-            self.img = F.pad(self.img, (0, self.mod_pad_w, 0, self.mod_pad_h), 'reflect')
-
-    def process(self):
-        # model inference
-        self.output = self.model(self.img)
-
-    def tile_process(self):
-        """It will first crop input images to tiles, and then process each tile.
-        Finally, all the processed tiles are merged into one images.
-
-        Modified from: https://github.com/ata4/esrgan-launcher
-        """
-        batch, channel, height, width = self.img.shape
-        output_height = height * self.scale
-        output_width = width * self.scale
-        output_shape = (batch, channel, output_height, output_width)
-
-        # start with black image
-        self.output = self.img.new_zeros(output_shape)
-        tiles_x = math.ceil(width / self.tile_size)
-        tiles_y = math.ceil(height / self.tile_size)
-
-        # loop over all tiles
-        for y in range(tiles_y):
-            for x in range(tiles_x):
-                # extract tile from input image
-                ofs_x = x * self.tile_size
-                ofs_y = y * self.tile_size
-                # input tile area on total image
-                input_start_x = ofs_x
-                input_end_x = min(ofs_x + self.tile_size, width)
-                input_start_y = ofs_y
-                input_end_y = min(ofs_y + self.tile_size, height)
-
-                # input tile area on total image with padding
-                input_start_x_pad = max(input_start_x - self.tile_pad, 0)
-                input_end_x_pad = min(input_end_x + self.tile_pad, width)
-                input_start_y_pad = max(input_start_y - self.tile_pad, 0)
-                input_end_y_pad = min(input_end_y + self.tile_pad, height)
-
-                # input tile dimensions
-                input_tile_width = input_end_x - input_start_x
-                input_tile_height = input_end_y - input_start_y
-                tile_idx = y * tiles_x + x + 1
-                input_tile = self.img[:, :, input_start_y_pad:input_end_y_pad, input_start_x_pad:input_end_x_pad]
-
-                # upscale tile
-                try:
-                    with torch.no_grad():
-                        output_tile = self.model(input_tile)
-                except RuntimeError as error:
-                    print('Error', error)
-                print(f'\tTile {tile_idx}/{tiles_x * tiles_y}')
-
-                # output tile area on total image
-                output_start_x = input_start_x * self.scale
-                output_end_x = input_end_x * self.scale
-                output_start_y = input_start_y * self.scale
-                output_end_y = input_end_y * self.scale
-
-                # output tile area without padding
-                output_start_x_tile = (input_start_x - input_start_x_pad) * self.scale
-                output_end_x_tile = output_start_x_tile + input_tile_width * self.scale
-                output_start_y_tile = (input_start_y - input_start_y_pad) * self.scale
-                output_end_y_tile = output_start_y_tile + input_tile_height * self.scale
-
-                # put tile into output image
-                self.output[:, :, output_start_y:output_end_y,
-                            output_start_x:output_end_x] = output_tile[:, :, output_start_y_tile:output_end_y_tile,
-                                                                       output_start_x_tile:output_end_x_tile]
-
-    def post_process(self):
-        # remove extra pad
-        if self.mod_scale is not None:
-            _, _, h, w = self.output.size()
-            self.output = self.output[:, :, 0:h - self.mod_pad_h * self.scale, 0:w - self.mod_pad_w * self.scale]
-        # remove prepad
-        if self.pre_pad != 0:
-            _, _, h, w = self.output.size()
-            self.output = self.output[:, :, 0:h - self.pre_pad * self.scale, 0:w - self.pre_pad * self.scale]
-        return self.output
-
-    @torch.no_grad()
-    def enhance(self, img, outscale=None, alpha_upsampler='realesrgan'):
-        h_input, w_input = img.shape[0:2]
-        # img: numpy
-        img = img.astype(np.float32)
-        if np.max(img) > 256:  # 16-bit image
-            max_range = 65535
-            print('\tInput is a 16-bit image')
-        else:
-            max_range = 255
-        img = img / max_range
-        if len(img.shape) == 2:  # gray image
-            img_mode = 'L'
-            img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        elif img.shape[2] == 4:  # RGBA image with alpha channel
-            img_mode = 'RGBA'
-            alpha = img[:, :, 3]
-            img = img[:, :, 0:3]
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            if alpha_upsampler == 'realesrgan':
-                alpha = cv2.cvtColor(alpha, cv2.COLOR_GRAY2RGB)
-        else:
-            img_mode = 'RGB'
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        # ------------------- process image (without the alpha channel) ------------------- #
-        self.pre_process(img)
-        if self.tile_size > 0:
-            self.tile_process()
-        else:
-            self.process()
-        output_img = self.post_process()
-        output_img = output_img.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-        output_img = np.transpose(output_img[[2, 1, 0], :, :], (1, 2, 0))
-        if img_mode == 'L':
-            output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2GRAY)
-
-        # ------------------- process the alpha channel if necessary ------------------- #
-        if img_mode == 'RGBA':
-            if alpha_upsampler == 'realesrgan':
-                self.pre_process(alpha)
-                if self.tile_size > 0:
-                    self.tile_process()
-                else:
-                    self.process()
-                output_alpha = self.post_process()
-                output_alpha = output_alpha.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-                output_alpha = np.transpose(output_alpha[[2, 1, 0], :, :], (1, 2, 0))
-                output_alpha = cv2.cvtColor(output_alpha, cv2.COLOR_BGR2GRAY)
-            else:  # use the cv2 resize for alpha channel
-                h, w = alpha.shape[0:2]
-                output_alpha = cv2.resize(alpha, (w * self.scale, h * self.scale), interpolation=cv2.INTER_LINEAR)
-
-            # merge the alpha channel
-            output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2BGRA)
-            output_img[:, :, 3] = output_alpha
-
-        # ------------------------------ return ------------------------------ #
-        if max_range == 65535:  # 16-bit image
-            output = (output_img * 65535.0).round().astype(np.uint16)
-        else:
-            output = (output_img * 255.0).round().astype(np.uint8)
-
-        if outscale is not None and outscale != float(self.scale):
-            output = cv2.resize(
-                output, (
-                    int(w_input * outscale),
-                    int(h_input * outscale),
-                ), interpolation=cv2.INTER_LANCZOS4)
-
-        return output, img_mode
 
 # Load model
 model_path = '8x_NMKD-Typescale_175k.pth'
 model = ModelLoader().load_from_file(model_path)
 denoise_strength  = 1
-upsampler = RealESRGANer(scale=8, model=model, tile=0, pre_pad=0, tile_pad=10, dni_weight = [denoise_strength, 1 - denoise_strength], device='cuda:0')
+upsampler = helper.RealESRGANer(
+    scale=8,
+    model=model,
+    tile=0,
+    pre_pad=0,
+    tile_pad=10,
+    dni_weight = [denoise_strength, 1 - denoise_strength],
+    device='cuda',
+)
 denoise_strength = 1
 
 # Initialize the Real-ESRGAN enhancer
@@ -264,7 +44,7 @@ yolo_license_plate = torch.hub.load(
 
 yolo_license_plate.conf = 0.60
 
-def detect_license_plate(img):
+def detect_license_plate(img, upscale=True):
     plates = yolo_LP_detect(img, size=640)
     list_plates = plates.pandas().xyxy[0].values.tolist()
     list_read_plates = set()
@@ -288,10 +68,16 @@ def detect_license_plate(img):
             lp = ""
             for cc in range(0, 2):
                 for ct in range(0, 2):
-                    lp = helper.read_plate(
-                        yolo_license_plate,
-                        utils_rotate.deskew(crop_img, cc, ct),
-                    )
+                    if upscale:
+                        lp = helper.read_plate(
+                            yolo_license_plate,
+                            utils_rotate.deskew(enhanced_img, cc, ct),
+                        )
+                    else:
+                        lp = helper.read_plate(
+                            yolo_license_plate,
+                            utils_rotate.deskew(crop_img, cc, ct),
+                        )
                     print(lp)
                     if lp != "unknown":
                         list_read_plates.add(lp)
@@ -314,7 +100,7 @@ def detect_license_plate(img):
     return list_read_plates
 
 
-def detect_license_plate_enhanced(img):
+def detect_license_plate_enhanced(img, upscale=True):
     plates = yolo_LP_detect(img, size=640)
     list_plates = plates.pandas().xyxy[0].values.tolist()
     list_read_plates = set()
@@ -326,41 +112,15 @@ def detect_license_plate_enhanced(img):
             list_read_plates.add(lp)
     else:
         for plate in list_plates:
-            flag = 0
             x = int(plate[0])  # xmin
             y = int(plate[1])  # ymin
             w = int(plate[2] - plate[0])  # xmax - xmin
             h = int(plate[3] - plate[1])  # ymax - ymin
             crop_img = img[y:y+h, x:x+w]
-            enhanced_img, _ = upsampler.enhance(crop_img)
-            return enhanced_img
+            if upscale:
+                enhanced_img, _ = upsampler.enhance(crop_img)
+                return enhanced_img
             return crop_img
-            cv2.rectangle(img, (int(plate[0]), int(plate[1])), (int(
-                plate[2]), int(plate[3])), color=(0, 0, 225), thickness=2)
-            lp = ""
-            for cc in range(0, 2):
-                for ct in range(0, 2):
-                    lp = helper.read_plate(
-                        yolo_license_plate,
-                        utils_rotate.deskew(crop_img, cc, ct),
-                    )
-                    if lp != "unknown":
-                        list_read_plates.add(lp)
-                        cv2.putText(
-                            img,
-                            lp,
-                            (
-                                int(plate[0]),
-                                int(plate[1]-10)
-                            ),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.9,
-                            (36, 255, 12),
-                            2,)
-                        flag = 1
-                        break
-                if flag == 1:
-                    break
-    return list_read_plates
+    return None
 
 

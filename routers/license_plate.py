@@ -35,6 +35,7 @@ class LicensePlateView:
     async def read_license_plate(
         self,
         file: UploadFile,
+        upscale: bool = True,
     ) -> List[LicensePlateBase]:
         """Read license plate with image."""
         contents = await file.read()
@@ -43,7 +44,7 @@ class LicensePlateView:
 
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        list_read_plates = detect_license_plate(img)
+        list_read_plates = detect_license_plate(img, upscale=upscale)
 
         license_plate = await sync_to_async(list)(Plate.objects.filter(
             number__in=list_read_plates,
@@ -61,6 +62,7 @@ class LicensePlateView:
     async def enhance_license_plate(
         self,
         file: UploadFile,
+        upscale: bool = True,
     ):
         """Enhance license plate with image."""
         contents = await file.read()
@@ -71,7 +73,7 @@ class LicensePlateView:
         # Decode the image
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        new_img = detect_license_plate_enhanced(img)
+        new_img = detect_license_plate_enhanced(img, upscale=upscale)
 
 
         # Encode the image back to JPEG format

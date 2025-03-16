@@ -28,10 +28,10 @@ def create_license_plate(token: str, license_plate: dict):
     return response.json()
 
 
-def read_license_plate(token: str, image_file):
+def read_license_plate(token: str, image_file, upscale=True):
     """Read a license plate from an uploaded image."""
     response = requests.post(
-        f"{BASE_URL}/license-plate/read-license-plate",
+        f"{BASE_URL}/license-plate/read-license-plate/?upscale={int(upscale)}",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": image_file},
     )
@@ -39,10 +39,10 @@ def read_license_plate(token: str, image_file):
     return response.json()
 
 
-def enhance_license_plate(token: str, image_file):
+def enhance_license_plate(token: str, image_file, upscale=True):
     """Enhance a license plate from an uploaded image."""
     response = requests.post(
-        f"{BASE_URL}/license-plate/enhance-license-plate",
+        f"{BASE_URL}/license-plate/enhance-license-plate/?upscale={int(upscale)}",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": image_file},
     )
@@ -80,9 +80,8 @@ if (st.session_state.get(
         )
         st.success("Logged in successfully")
         login_form.empty()
-
-        create_plate_tab, read_plate_tab = st.tabs(
-            ["Create License Plate", "Read License Plate"])
+        create_plate_tab, read_plate_tab, real_esrgan_tab = st.tabs(
+            ["Create License Plate", "Read License Plate", "Real-ESRGAN"])
 
         with create_plate_tab:
             st.header("Create License Plate")
@@ -97,7 +96,7 @@ if (st.session_state.get(
                         {
                             "number": license_plate_number,
                             "wanted": license_plate_wanted,
-                        },
+                        }
                     )
                     st.success(
                         f"Created license plate {license_plate['number']}",
@@ -106,18 +105,30 @@ if (st.session_state.get(
         with read_plate_tab:
             st.header("Read License Plate")
             image_file = st.file_uploader("Upload an image of a license plate")
+            upscale = st.checkbox("Upscale", value=True, key="read_plate_upscale")
 
             if st.button("Read License Plate"):
-                result = read_license_plate(
-                    st.session_state["token"], image_file.getvalue())
-                if result == "Wanted license plate detected":
-                    st.error(result)
-                else:
-                    st.success(f"Read license plate {result['number']}")
+                results = read_license_plate(
+                    st.session_state["token"], image_file.getvalue(), upscale=upscale)
+                for result in results:
+                    if result["wanted"]:
+                        st.error(f"Wanted license plate detected {result['number']}")
+                    else:
+                        st.success(f"Read license plate {result['number']}")
 
+        with real_esrgan_tab:
+            st.header("Real ESRGAN")
+            image_file = st.file_uploader("Upload an image of license plate")
+            upscale = st.checkbox("Upscale", value=True, key="real_esrgan_upscale")
+            
+            if st.button("Enhance License Plate"):
+                response = enhance_license_plate(
+                    st.session_state["token"], image_file.getvalue(), upscale=upscale)
+                enhanced_image = Image.open(BytesIO(response.content))
+                st.image(enhanced_image, caption="Enhanced License Plate", use_column_width=True)
 else:
     create_plate_tab, read_plate_tab, real_esrgan_tab = st.tabs(
-        ["Create License Plate", "Read License Plate", "Real-ESRGAN"])
+    ["Create License Plate", "Read License Plate", "Real-ESRGAN"])
 
     with create_plate_tab:
         st.header("Create License Plate")
@@ -141,10 +152,11 @@ else:
     with read_plate_tab:
         st.header("Read License Plate")
         image_file = st.file_uploader("Upload an image of a license plate")
+        upscale_read_plate = st.checkbox("Upscale", value=True, key="read_plate_upscale")
 
         if st.button("Read License Plate"):
             results = read_license_plate(
-                st.session_state["token"], image_file.getvalue())
+                st.session_state["token"], image_file.getvalue(), upscale=upscale_read_plate)
             for result in results:
                 if result["wanted"]:
                     st.error(f"Wanted license plate detected {result['number']}")
@@ -154,12 +166,10 @@ else:
     with real_esrgan_tab:
         st.header("Real ESRGAN")
         image_file = st.file_uploader("Upload an image of license plate")
+        upscale = st.checkbox("Upscale", value=True, key="real_esrgan_upscale")
         
         if st.button("Enhance License Plate"):
             response = enhance_license_plate(
-                st.session_state["token"], image_file.getvalue())
-            if response.status_code == 200:
-                enhanced_image = Image.open(BytesIO(response.content))
-                st.image(enhanced_image, caption="Enhanced License Plate", use_column_width=True)
-            else:
-                st.error(f"Failed to enhance image: {response.status_code}")
+                st.session_state["token"], image_file.getvalue(), upscale=upscale)
+            enhanced_image = Image.open(BytesIO(response.content))
+            st.image(enhanced_image, caption="Enhanced License Plate", use_column_width=True)
