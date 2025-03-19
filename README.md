@@ -9,7 +9,7 @@ This app provide 2 (+1 authentication) APIs and admin UIs to recognize and manag
 
 ## How to run
 - Install python (3.9+ recommended) and [pytorch](https://pytorch.org/get-started/locally/) (recommended to install the right version for your system)
-- Run `git clone https://github.com/vt132/yolov5.git` to clone yolov5 repo for running models. Also download pretrained models for APIs to works.
+- Run `git clone https://github.com/vt132/yolov5.git` to clone yolov5 repo for running models (go to yolov5/models/experimental.py, go to line 79 and change to `ckpt = torch.load(attempt_download(w), map_location='cpu', weights_only=False)`) for newer pytorch version (2.5+). Also download pretrained models for APIs to works.
 - Run `pip install -r requirements.txt` to install required packages
 - Run `python manage.py migrate` to create local database
 - Run `python manage.py createsuperuser` to create admin user for Admin page access (/app/admin/local)
@@ -22,4 +22,4 @@ Models:
 - [Plate detection](https://drive.google.com/file/d/1wnbyyVZzZJoMwhBYFdYQ578648mKMJFX/view?usp=sharing)
 - [Character detection](https://drive.google.com/file/d/1WeOq1l41-3cV7tgDNVPxl03k_52atGPb/view?usp=sharing)
 - [Upscaler](https://drive.google.com/file/d/1b61PEktul5tzkLQsFRATjAZwvla_KLS_/view?usp=drive_link)
-Old Demo: [Link](https://youtu.be/0H4fDBCdg2g)
+Old Demo (License Plate without upscaling functionality): [Link](https://youtu.be/0H4fDBCdg2g)
