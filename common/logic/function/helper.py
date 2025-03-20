@@ -16,12 +16,20 @@ def check_point_linear(x, y, x1, y1, x2, y2):
     return(math.isclose(y_pred, y, abs_tol = 3))
 
 # detect character and number in license plate
-def read_plate(yolo_license_plate, im):
+def read_plate(yolo_license_plate, im, pre_detected_boxes=None):
     LP_type = "1"
-    results = yolo_license_plate(im)
-    bb_list = results.pandas().xyxy[0].values.tolist()
+    if pre_detected_boxes is None:
+        # Normal detection path
+        results = yolo_license_plate(im, size=640)
+        bb_list = results.pandas().xyxy[0].values.tolist()
+    else:
+        # Use pre-detected boxes
+        bb_list = pre_detected_boxes
+    
     if len(bb_list) == 0 or len(bb_list) < 7 or len(bb_list) > 10:
         return "unknown"
+        
+    # Rest of your function remains the same
     center_list = []
     y_mean = 0
     y_sum = 0
@@ -30,7 +38,6 @@ def read_plate(yolo_license_plate, im):
         y_c = (bb[1]+bb[3])/2
         y_sum += y_c
         center_list.append([x_c,y_c,bb[-1]])
-
     # find 2 point to draw line
     l_point = center_list[0]
     r_point = center_list[0]
@@ -68,8 +75,8 @@ def read_plate(yolo_license_plate, im):
     return license_plate
 
 
-class RealESRGANer():
-    """A helper class for upsampling images with RealESRGAN.
+class ESRGANer():
+    """A helper class for upsampling images with ESRGAN-like model.
 
     Args:
         scale (int): Upsampling scale factor used in the networks. It is usually 2 or 4.

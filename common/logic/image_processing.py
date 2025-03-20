@@ -14,7 +14,7 @@ from spandrel import ModelLoader
 model_path = '8x_NMKD-Typescale_175k.pth'
 model = ModelLoader().load_from_file(model_path)
 denoise_strength  = 1
-upsampler = helper.RealESRGANer(
+upsampler = helper.ESRGANer(
     scale=8,
     model=model,
     tile=0,
@@ -41,11 +41,9 @@ yolo_license_plate = torch.hub.load(
     force_reload=True,
     source='local',
 )
-
-yolo_license_plate.conf = 0.60
-
 def detect_license_plate(img, upscale=True):
     plates = yolo_LP_detect(img, size=640)
+    print(plates)
     list_plates = plates.pandas().xyxy[0].values.tolist()
     list_read_plates = set()
     if len(list_plates) == 0:
@@ -56,46 +54,60 @@ def detect_license_plate(img, upscale=True):
             list_read_plates.add(lp)
     else:
         for plate in list_plates:
-            flag = 0
             x = int(plate[0])  # xmin
             y = int(plate[1])  # ymin
             w = int(plate[2] - plate[0])  # xmax - xmin
             h = int(plate[3] - plate[1])  # ymax - ymin
             crop_img = img[y:y+h, x:x+w]
-            enhanced_img, _ = upsampler.enhance(crop_img)
-            cv2.rectangle(img, (int(plate[0]), int(plate[1])), (int(
-                plate[2]), int(plate[3])), color=(0, 0, 225), thickness=2)
-            lp = ""
-            for cc in range(0, 2):
-                for ct in range(0, 2):
-                    if upscale:
-                        lp = helper.read_plate(
-                            yolo_license_plate,
-                            utils_rotate.deskew(enhanced_img, cc, ct),
-                        )
-                    else:
-                        lp = helper.read_plate(
-                            yolo_license_plate,
-                            utils_rotate.deskew(crop_img, cc, ct),
-                        )
-                    print(lp)
+            
+            if upscale:
+                enhanced_img, _ = upsampler.enhance(crop_img)
+                plate_img = enhanced_img
+            else:
+                plate_img = crop_img
+            
+            # Step 1: Detect characters in original image first
+            char_results = yolo_license_plate(plate_img, size=640)
+            char_boxes = char_results.pandas().xyxy[0].values.tolist()
+            print(char_results)
+            print(char_boxes)
+            # Step 2: If enough characters detected, try deskewing and transform coordinates
+            if len(char_boxes) >= 7 and len(char_boxes) <= 10:
+                # Try deskewing with coordinate transformation
+                for cc in range(0, 2):
+                    for ct in range(0, 2):
+                        deskewed_img, angle = utils_rotate.deskew(plate_img, cc, ct)
+                        transformed_boxes = utils_rotate.transform_boxes_after_rotation(
+                            char_boxes, angle, plate_img.shape)
+                        
+                        lp = helper.read_plate(yolo_license_plate, deskewed_img, 
+                                              pre_detected_boxes=transformed_boxes)
+                        
+                        if lp != "unknown":
+                            list_read_plates.add(lp)
+                            cv2.putText(img, lp, (int(plate[0]), int(plate[1]-10)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
+                            break
                     if lp != "unknown":
-                        list_read_plates.add(lp)
-                        cv2.putText(
-                            img,
-                            lp,
-                            (
-                                int(plate[0]),
-                                int(plate[1]-10)
-                            ),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.9,
-                            (36, 255, 12),
-                            2,)
-                        flag = 1
                         break
-                if flag == 1:
-                    break
+            
+            # Step 3: If not enough characters, try deskewing and detecting again
+            else:
+                for cc in range(0, 2):
+                    for ct in range(0, 2):
+                        deskewed_img, _ = utils_rotate.deskew(plate_img, cc, ct)
+                        
+                        # Normal detection on deskewed image (no coordinate transform)
+                        lp = helper.read_plate(yolo_license_plate, deskewed_img)
+                        
+                        if lp != "unknown":
+                            list_read_plates.add(lp)
+                            cv2.putText(img, lp, (int(plate[0]), int(plate[1]-10)),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
+                            break
+                    if lp != "unknown":
+                        break
+    
     print(list_read_plates)
     return list_read_plates
 

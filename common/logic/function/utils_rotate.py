@@ -56,6 +56,55 @@ def compute_skew(src_img, center_thres):
 
 def deskew(src_img, change_cons, center_thres):
     if change_cons == 1:
-        return rotate_image(src_img, compute_skew(changeContrast(src_img), center_thres))
+        angle = compute_skew(changeContrast(src_img), center_thres)
     else:
-        return rotate_image(src_img, compute_skew(src_img, center_thres))
+        angle = compute_skew(src_img, center_thres)
+    
+    rotated_img = rotate_image(src_img, angle)
+    return rotated_img, angle
+
+def transform_boxes_after_rotation(boxes, angle, image_shape):
+    """
+    Transform bounding boxes after image rotation
+    boxes: list of [xmin, ymin, xmax, ymax, confidence, class]
+    angle: rotation angle in degrees
+    image_shape: (height, width) of the image
+    """
+    import math
+    transformed_boxes = []
+    
+    # Calculate rotation center (image center)
+    h, w = image_shape[0:2]
+    cx, cy = w/2, h/2
+    
+    # Convert angle to radians
+    angle_rad = angle * math.pi / 180
+    cos_val = math.cos(angle_rad)
+    sin_val = math.sin(angle_rad)
+    
+    for box in boxes:
+        xmin, ymin, xmax, ymax = box[0], box[1], box[2], box[3]
+        confidence, class_id = box[4], box[5]
+        
+        # Transform each corner of the bounding box
+        corners = [
+            [xmin, ymin], [xmax, ymin], 
+            [xmax, ymax], [xmin, ymax]
+        ]
+        
+        rotated_corners = []
+        for x, y in corners:
+            # Shift to origin, rotate, then shift back
+            x_rot = cos_val * (x - cx) - sin_val * (y - cy) + cx
+            y_rot = sin_val * (x - cx) + cos_val * (y - cy) + cy
+            rotated_corners.append([x_rot, y_rot])
+        
+        # Get new bounding box from rotated corners
+        xs = [corner[0] for corner in rotated_corners]
+        ys = [corner[1] for corner in rotated_corners]
+        new_xmin, new_xmax = min(xs), max(xs)
+        new_ymin, new_ymax = min(ys), max(ys)
+        
+        transformed_boxes.append([new_xmin, new_ymin, new_xmax, new_ymax, confidence, class_id])
+    
+    return transformed_boxes
