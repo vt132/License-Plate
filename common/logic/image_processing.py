@@ -21,7 +21,7 @@ upsampler = helper.ESRGANer(
     pre_pad=0,
     tile_pad=10,
     dni_weight = [denoise_strength, 1 - denoise_strength],
-    device='cuda',
+    device='cuda' if torch.cuda.is_available() else 'cpu',
 )
 denoise_strength = 1
 
